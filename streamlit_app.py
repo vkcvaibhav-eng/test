@@ -36,6 +36,7 @@ if st.button("Generate & Process", type="primary"):
                 st.metric(label="Clout Score", value=f"{clout}%")
 
 # BUTTON A: Transfer Logic
-if st.session_state.passed_idea:
-   if st.button("🚀 Send to Search Engine"):
-    st.switch_page("pages/search_engine.py")
+if st.session_state.get("passed_idea"):
+    if st.button("🚀 Send to Search Engine"):
+        st.switch_page("pages/search_engine.py") # Directs to the file in your new folder
+
