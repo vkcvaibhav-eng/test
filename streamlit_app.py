@@ -3,7 +3,7 @@ from logic import generate_ideas_deepseek, select_and_score_openai
 
 st.set_page_config(page_title="AI Idea Dashboard", layout="centered")
 
-# Initialize session state for the idea
+# Initialize session state variables
 if "passed_idea" not in st.session_state:
     st.session_state.passed_idea = ""
 
@@ -19,6 +19,7 @@ with st.container(border=True):
     search_title = st.text_input("Search Title")
     tongue_use = st.text_input("Tongue Use")
 
+# --- UNIFIED GENERATE LOGIC (Fixed Duplicate Error) ---
 if st.button("Generate & Process", type="primary"):
     if not deepseek_key or not openai_key:
         st.error("Please enter both API keys.")
@@ -27,42 +28,16 @@ if st.button("Generate & Process", type="primary"):
             raw_ideas = generate_ideas_deepseek(deepseek_key, title, search_title, tongue_use)
             best_idea, clout = select_and_score_openai(openai_key, raw_ideas, title, search_title)
             
-            # Save to session state
+            # Save variables for both Page 2 (Search) and Page 3 (Sorting)
             st.session_state.passed_idea = best_idea
+            st.session_state.openai_key = openai_key 
             
             st.subheader("Selected Best Idea")
             with st.container(border=True):
                 st.markdown(best_idea)
                 st.metric(label="Clout Score", value=f"{clout}%")
 
-# BUTTON A: Transfer Logic
+# --- UNIFIED NAVIGATION ---
 if st.session_state.get("passed_idea"):
     if st.button("🚀 Send to Search Engine"):
-        st.switch_page("pages/search_engine.py") # Directs to the file in your new folder
-# --- UPDATE IN streamlit_app.py ---
-
-# Ensure the keys are persisted in session state for the search and sorting pages
-if st.button("Generate & Process", type="primary"):
-    if not deepseek_key or not openai_key:
-        st.error("Please enter both API keys.")
-    else:
-        with st.spinner("Processing..."):
-            raw_ideas = generate_ideas_deepseek(deepseek_key, title, search_title, tongue_use)
-            best_idea, clout = select_and_score_openai(openai_key, raw_ideas, title, search_title)
-            
-            # Save to session state for Page 2 and Page 3
-            st.session_state.passed_idea = best_idea
-            st.session_state.openai_key = openai_key  # NEW: Save for Page 3 refinement
-            
-            st.subheader("Selected Best Idea")
-            with st.container(border=True):
-                st.markdown(best_idea)
-                st.metric(label="Clout Score", value=f"{clout}%")
-
-# BUTTON A: Navigation
-if st.session_state.get("passed_idea"):
-    if st.button("🚀 Send to Search Engine"):
-        # This points to your second page
         st.switch_page("pages/search_engine.py")
-
-
