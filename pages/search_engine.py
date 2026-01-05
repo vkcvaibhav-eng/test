@@ -1,50 +1,101 @@
 import streamlit as st
 import requests
 import json
+import time
 from serpapi import GoogleSearch
 from openai import OpenAI
 
+# --- CONFIGURATION & SESSION STATE ---
 st.set_page_config(page_title="AgriResearch Finder v1.2", layout="wide")
 
-# --- INTEGRATION: Retrieve idea from Dashboard ---
+# INTEGRATION: Retrieve the idea passed from the Dashboard 
 passed_idea = st.session_state.get("passed_idea", "Amrasca biguttula biguttula management in South Asia")
 
-# --- CORE FUNCTIONS ---
+# Persistent memory of the code versions
+if "code_history" not in st.session_state:
+    st.session_state.code_history = [
+        "v1.0: Core engine (Google Scholar, OpenAlex, Basic Semantic Scholar)",
+        "v1.1: Added KrishiKosh & Auth-Semantic (Broken Core)",
+        "v1.2: Fixed Core Workflow + Independent Layers"
+    ]
+
+# --- CORE FUNCTIONS (CORE LOGIC UNCHANGED) ---
+
 def search_serpapi(query, api_key):
     params = {"engine": "google_scholar", "q": query, "api_key": api_key, "num": 20}
     try:
         search = GoogleSearch(params)
         results = search.get_dict()
-        return [{"title": res.get("title"), "link": res.get("link"), "snippet": res.get("snippet"), "source": "Google Scholar"} 
-                for res in results.get("organic_results", [])]
+        papers = []
+        if "organic_results" in results:
+            for res in results["organic_results"]:
+                papers.append({"title": res.get("title"), "link": res.get("link"), "snippet": res.get("snippet"), "source": "Google Scholar"})
+        return papers
+    except: return []
+
+def search_semantic_scholar_basic(query):
+    url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={query}&limit=20&fields=title,url,abstract"
+    try:
+        response = requests.get(url, timeout=10)
+        papers = []
+        if response.status_code == 200:
+            data = response.json()
+            for res in data.get("data", []):
+                papers.append({"title": res.get("title"), "link": res.get("url"), "snippet": res.get("abstract"), "source": "Semantic Scholar"})
+        return papers
     except: return []
 
 def search_openalex(query):
     url = f"https://api.openalex.org/works?search={query}"
     try:
         response = requests.get(url, timeout=10)
+        papers = []
         if response.status_code == 200:
-            return [{"title": res.get("display_name"), "link": res.get("doi") or res.get("id"), "snippet": "Source: OpenAlex Repository", "source": "OpenAlex"} 
-                    for res in response.json().get("results", [])]
+            data = response.json()
+            for res in data.get("results", []):
+                papers.append({"title": res.get("display_name"), "link": res.get("doi") or res.get("id"), "snippet": "Source: OpenAlex Repository", "source": "OpenAlex"})
+        return papers
+    except: return []
+
+def search_semantic_scholar_authenticated(query, api_key):
+    url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={query}&limit=20&fields=title,url,abstract,citationCount,year"
+    headers = {"x-api-key": api_key}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return [{"title": f"{res.get('title')} ({res.get('year', 'N/A')})", "link": res.get("url"), "snippet": f"Citations: {res.get('citationCount', 0)} | {res.get('abstract', '')}", "source": "Semantic Scholar (Auth)"} for res in data.get("data", [])]
+    except: pass
+    return []
+
+def search_krishikosh_layer(query, api_key):
+    full_query = f"{query} site:krishikosh.egranth.ac.in"
+    params = {"engine": "google", "q": full_query, "api_key": api_key, "num": 10}
+    try:
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        return [{"title": res.get("title"), "link": res.get("link"), "snippet": res.get("snippet"), "source": "KrishiKosh Thesis"} for res in results.get("organic_results", [])]
     except: return []
 
 def generate_queries_llm(idea, client, is_thesis=False):
-    prompt = f"Generate 10 technical search queries about: {idea}. JSON list."
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"}
-    )
-    return json.loads(response.choices[0].message.content).get("queries", [idea])
+    if is_thesis:
+        prompt = f"Generate 10 broad thesis-style search queries for Indian Agri Universities about: {idea}. JSON list."
+    else:
+        prompt = f"Generate 10 technical search queries for high-impact journals about: {idea}. JSON list."
+    response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"})
+    key = "queries" if not is_thesis else "thesis_queries"
+    return json.loads(response.choices[0].message.content).get(key, [idea])
 
-# --- UI ---
-st.title("🌾 Agri-Research Paper Engine")
+# --- UI WORKFLOW ---
+
+st.title("🌾 Agri-Research Paper Engine v1.2")
 
 with st.sidebar:
     st.header("Credentials")
     serp_key = st.text_input("SerpAPI Key", type="password")
     openai_key = st.text_input("OpenAI Key", type="password", value=st.session_state.get("openai_key", ""))
-    num_queries = st.slider("Query Variations", 1, 10, 3)
+    semantic_key = st.text_input("Semantic Scholar Key (Optional)", type="password")
+    num_queries = st.slider("Query Variations", 1, 20, 5)
 
 idea = st.text_area("Research Idea:", value=passed_idea)
 
@@ -56,22 +107,34 @@ if st.button("Run Search Engine"):
         all_results = []
         seen = set()
 
-        with st.status("Searching...", expanded=True):
-            queries = generate_queries_llm(idea, client)
-            for q in queries[:num_queries]:
+        with st.status("Running Search Logic...", expanded=True):
+            journal_queries = generate_queries_llm(idea, client)
+            for q in journal_queries[:num_queries]:
                 st.write(f"Searching: {q}")
-                results = search_serpapi(q, serp_key) + search_openalex(q)
-                for p in results:
+                s1 = search_serpapi(q, serp_key)
+                s2 = search_openalex(q)
+                s3 = search_semantic_scholar_authenticated(q, semantic_key) if semantic_key else search_semantic_scholar_basic(q)
+                
+                for p in s1 + s2 + s3:
                     if p['title'] and p['title'].lower() not in seen:
                         all_results.append(p)
                         seen.add(p['title'].lower())
 
-        # --- INTEGRATION: Save for Sorting Page ---
+        with st.status("Searching KrishiKosh Theses...", expanded=False):
+            thesis_queries = generate_queries_llm(idea, client, is_thesis=True)
+            for tq in thesis_queries[:3]:
+                t_results = search_krishikosh_layer(tq, serp_key)
+                for tr in t_results:
+                    if tr['title'].lower() not in seen:
+                        all_results.append(tr)
+                        seen.add(tr['title'].lower())
+
+        # --- INTEGRATION: SAVE FOR PAGE 3 ---
         st.session_state.all_papers = all_results
         st.session_state.search_idea = idea
         st.session_state.openai_key = openai_key 
         
-        st.success(f"Found {len(all_results)} papers. Go to '3_Sorting_and_Filtering' to refine them.")
+        st.success(f"Found {len(all_results)} papers. Go to 'Sorting and Filtering' to refine them.")
         
         for res in all_results:
             with st.expander(f"[{res['source']}] {res['title']}"):
