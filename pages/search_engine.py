@@ -194,3 +194,11 @@ if st.button("Run Search Engine"):
             with st.expander(f"[{res['source']}] {res['title']}"):
                 st.write(res['snippet'])
                 st.write(f"[Link]({res['link']})")
+# Inside the "Run Search Engine" button logic in search_engine.py
+if st.button("Run Search Engine"):
+    # ... (existing search code) ...
+    
+    # Save to session state for the next page
+    st.session_state.all_papers = all_results
+    st.session_state.search_idea = idea # The 3-line research idea
+    st.success(f"Found {len(all_results)} items. Proceed to 'Sorting and Filtering' page.")
