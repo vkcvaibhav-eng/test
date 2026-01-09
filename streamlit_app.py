@@ -40,3 +40,9 @@ if st.button("Generate & Process", type="primary"):
 if st.session_state.get("passed_idea"):
     if st.button("🚀 Send to Search Engine"):
         st.switch_page("pages/search_engine.py")
+# In streamlit_app.py (at the bottom)
+if "final_report" in st.session_state:
+    st.sidebar.success("✅ Analysis Ready on Page 4")
+    if st.button("View Final Results"):
+        st.switch_page("pages/4_deep_analysis.py") # Direct jump to Page 4
+
