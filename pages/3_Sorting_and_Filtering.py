@@ -1,11 +1,16 @@
 import streamlit as st
 import json
+import hashlib
 from openai import OpenAI
 
 # Page Configuration
 st.set_page_config(page_title="Refinement & Scoring", layout="wide")
 
 # --- CORE FUNCTIONS ---
+
+def generate_paper_id(title):
+    """Generates a stable unique ID based on the title text."""
+    return hashlib.md5(title.encode('utf-8')).hexdigest()
 
 def llm_filter_stage_1(papers, idea, client):
     """Stage 1: GPT-4o-mini rough sort to find top 50."""
@@ -21,7 +26,10 @@ def llm_filter_stage_1(papers, idea, client):
         response_format={"type": "json_object"}
     )
     data = json.loads(response.choices[0].message.content)
-    indices = data.get("indices", [])
+    
+    # FIX 1: Use set() to remove duplicate indices returned by the LLM
+    indices = sorted(list(set(data.get("indices", [])))) 
+    
     return [papers[i] for i in indices if i < len(papers)]
 
 def llm_score_stage_2(papers, idea, client):
@@ -44,11 +52,16 @@ def llm_score_stage_2(papers, idea, client):
             response_format={"type": "json_object"}
         )
         data = json.loads(res.choices[0].message.content)
-        p['relevance_score'] = data.get('score', 0)
-        p['category'] = data.get('category', 'Research Article')
-        # Generate a truly unique ID based on title hash or index to avoid DuplicateWidgetID
-        p['id'] = f"paper_{i}_{hash(p['title'])}" 
-        refined_papers.append(p)
+        
+        # Create a new dict object to avoid modifying the original by reference
+        new_paper = p.copy() 
+        new_paper['relevance_score'] = data.get('score', 0)
+        new_paper['category'] = data.get('category', 'Research Article')
+        
+        # FIX 2: Use a stable MD5 hash for the ID instead of Python's hash()
+        new_paper['id'] = f"{i}_{generate_paper_id(p['title'])}"
+        
+        refined_papers.append(new_paper)
         progress_bar.progress((i + 1) / len(papers))
     return refined_papers
 
@@ -56,7 +69,6 @@ def llm_score_stage_2(papers, idea, client):
 
 st.title("⚖️ Paper Scoring & Selection Dashboard")
 
-# Initialize selection state
 if "selected_paper_ids" not in st.session_state:
     st.session_state.selected_paper_ids = set()
 
@@ -77,17 +89,17 @@ else:
         else:
             client = OpenAI(api_key=openai_key)
             with st.status("Processing...", expanded=True):
-                top_50 = llm_filter_stage_1(papers[:300], idea, client)
-                scored_papers = llm_score_stage_2(top_50, idea, client)
+                # Only take the first 300 to stay within context limits
+                top_candidates = llm_filter_stage_1(papers[:300], idea, client)
+                scored_papers = llm_score_stage_2(top_candidates, idea, client)
                 st.session_state.scored_papers = scored_papers
-                st.session_state.selected_paper_ids = set() # Reset
+                st.session_state.selected_paper_ids = set() 
             st.rerun()
 
     # --- DISPLAY LOGIC ---
     if "scored_papers" in st.session_state:
         scored = st.session_state.scored_papers
         
-        # Mapping categories and limits based on your drawing
         categories = [
             {"key": "Research Article", "label": "Research Papers", "limit": 30},
             {"key": "Review Paper", "label": "Review Papers", "limit": 5},
@@ -97,7 +109,6 @@ else:
         for cat in categories:
             st.header(f"📂 {cat['label']}")
             
-            # Filter and sort papers by score
             cat_papers = sorted(
                 [p for p in scored if p['category'] == cat['key']], 
                 key=lambda x: x.get('relevance_score', 0), 
@@ -106,7 +117,6 @@ else:
 
             col_selected, col_candidates = st.columns([1, 1])
 
-            # LEFT COLUMN: Selected (Inward/Outward - Outward logic)
             with col_selected:
                 st.subheader(f"✅ Selected {cat['label']}")
                 selected_in_cat = [p for p in cat_papers if p['id'] in st.session_state.selected_paper_ids]
@@ -117,31 +127,34 @@ else:
                 for p in selected_in_cat:
                     cols = st.columns([0.85, 0.15])
                     cols[0].info(f"**{p['relevance_score']}%** - {p['title']}")
-                    # REMOVE Button (Move Outward)
-                    if cols[1].button("🗑️", key=f"rem_{p['id']}"):
+                    if cols[1].button("🗑️", key=f"rem_{cat['key']}_{p['id']}"):
                         st.session_state.selected_paper_ids.remove(p['id'])
                         st.rerun()
 
-            # RIGHT COLUMN: Candidates (Inward logic)
             with col_candidates:
                 st.subheader(f"🔍 Best {cat['limit']} Candidates")
                 remaining_in_cat = [p for p in cat_papers if p['id'] not in st.session_state.selected_paper_ids]
-                
-                # Show only up to the limit specified
                 display_list = remaining_in_cat[:cat['limit']]
                 
                 if not display_list:
                     st.caption("No candidates available.")
                 
                 for p in display_list:
-                    # CHECKBOX to move Inward
-                    # Using a unique key combining category and ID to prevent the error in the screenshot
-                    if st.checkbox(f"{p['relevance_score']}% - {p['title']}", key=f"chk_{cat['key']}_{p['id']}"):
-                        st.session_state.selected_paper_ids.add(p['id'])
+                    # FIX 3: Ensured the checkbox key is unique by including category and ID
+                    # We check if the ID is already in the set to determine value
+                    is_selected = p['id'] in st.session_state.selected_paper_ids
+                    if st.checkbox(f"{p['relevance_score']}% - {p['title']}", 
+                                   value=is_selected,
+                                   key=f"chk_{cat['key']}_{p['id']}"):
+                        if p['id'] not in st.session_state.selected_paper_ids:
+                            st.session_state.selected_paper_ids.add(p['id'])
+                            st.rerun()
+                    elif is_selected:
+                        # This handles the case if they uncheck it from the candidate side
+                        st.session_state.selected_paper_ids.remove(p['id'])
                         st.rerun()
 
             st.divider()
 
-        # Full list view
         with st.expander("📋 View All Raw Scored Data"):
             st.table([{"Score": p['relevance_score'], "Type": p['category'], "Title": p['title']} for p in scored])
