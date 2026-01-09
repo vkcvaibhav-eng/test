@@ -158,3 +158,4 @@ else:
 
         with st.expander("📋 View All Raw Scored Data"):
             st.table([{"Score": p['relevance_score'], "Type": p['category'], "Title": p['title']} for p in scored])
+    st.session_state['selected_papers'] = list_of_chosen_papers
