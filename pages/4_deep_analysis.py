@@ -1,47 +1,58 @@
 import streamlit as st
-from google import genai  # For Gemini 3 Pro
-from anthropic import Anthropic  # For Claude 5.1
+from openai import OpenAI
+# Note: You can add other clients (Anthropic, Google) here as you grow
 
-st.set_page_config(page_title="Deep Analysis", layout="wide")
-
-# 1. Retrieve data from previous pages
-selected_ids = st.session_state.get("selected_paper_ids", set())
-all_papers = st.session_state.get("scored_papers", [])
-
-# Filter to get the actual paper data
-papers_to_analyze = [p for p in all_papers if p['id'] in selected_ids]
+st.set_page_config(page_title="Deep Research Analysis", layout="wide")
 
 st.title("📑 Page 4: Deep Research Synthesis")
 
-if not papers_to_analyze:
-    st.warning("⚠️ No papers selected. Please go to Page 3 first.")
+# 1. Retrieve the papers you checked on Page 3
+selected_ids = st.session_state.get("selected_paper_ids", set())
+all_scored = st.session_state.get("scored_papers", [])
+final_papers = [p for p in all_scored if p['id'] in selected_ids]
+
+if not final_papers:
+    st.warning("⚠️ No papers selected. Go back to Page 3 and check some boxes!")
+    if st.button("⬅️ Back to Selection"):
+        st.switch_page("pages/3_Sorting_and_Filtering.py")
 else:
-    st.info(f"Analyzing {len(papers_to_analyze)} selected papers.")
+    st.info(f"Analyzing {len(final_papers)} selected documents.")
+    
+    # 2. Select the "Strength" LLM based on your handwritten notes
+    with st.sidebar:
+        st.header("🧠 LLM Strength Selection")
+        llm_choice = st.selectbox("Choose Best Task Performer", 
+                                ["OpenAI (All-rounder)", "Claude (Citations)", "DeepSeek (Logic)"])
+        api_key = st.session_state.get("openai_key")
 
-    # 2. Setup API Keys (pulled from sidebar or session state)
-    google_key = st.session_state.get("google_api_key")
-    claude_key = st.session_state.get("claude_api_key")
-
-    if st.button("🚀 Run Final Analysis"):
-        with st.status("Reading & Synthesizing...", expanded=True):
+    if st.button("🚀 Generate Final Summary & Logic"):
+        if not api_key:
+            st.error("Missing API Key. Please enter it on the Dashboard.")
+        else:
+            client = OpenAI(api_key=api_key)
             
-            # --- STEP A: Gemini Reads All Context ---
-            st.write("Gemini 3 Pro is reading the full context...")
-            # (Example logic: Gemini processes the snippets and reference lists)
-            full_context = "\n".join([f"Title: {p['title']} | Snippet: {p['snippet']}" for p in papers_to_analyze])
+            for paper in final_papers:
+                with st.container(border=True):
+                    st.subheader(f"📄 {paper['title']}")
+                    st.caption(f"Category: {paper['category']} | Score: {paper['relevance_score']}%")
+                    
+                    with st.spinner("Writing Logical Arguments..."):
+                        # Prompt follows your notes: Read Abstract, Results, Reference sections
+                        prompt = f"""
+                        Task: Theme Extraction & Long Logic Writing
+                        Context: {paper['snippet']}
+                        
+                        Requirements from User:
+                        1. First read Abstract to understand the paper.
+                        2. Specifically extract themes from Results & Discussion.
+                        3. Write a summary with Logical Arguments.
+                        4. Match citations to the Reference Section.
+                        """
+                        
+                        response = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[{"role": "user", "content": prompt}]
+                        )
+                        st.markdown(response.choices[0].message.content)
             
-            # --- STEP B: Claude Writes with Citations ---
-            st.write("Claude 5.1 is generating the summary and logic...")
-            # Note: You would call your actual API logic here
-            final_report = "Summary with cited references would appear here..." 
-            
-            st.session_state.final_report = final_report
-            st.success("Analysis Complete!")
-
-    # 3. Display Results
-    if "final_report" in st.session_state:
-        st.markdown("### 📚 Final Research Summary")
-        st.write(st.session_state.final_report)
-        
-        # Option to download
-        st.download_button("Download Report", st.session_state.final_report, file_name="research_summary.md")
+            st.success("✅ Analysis Complete! You can now copy this to your report.")
