@@ -46,8 +46,8 @@ def llm_score_stage_2(papers, idea, client):
         data = json.loads(res.choices[0].message.content)
         p['relevance_score'] = data.get('score', 0)
         p['category'] = data.get('category', 'Research Article')
-        # Add a unique ID for selection tracking
-        p['id'] = f"{p['category']}_{i}" 
+        # Generate a truly unique ID based on title hash or index to avoid DuplicateWidgetID
+        p['id'] = f"paper_{i}_{hash(p['title'])}" 
         refined_papers.append(p)
         progress_bar.progress((i + 1) / len(papers))
     return refined_papers
@@ -56,7 +56,7 @@ def llm_score_stage_2(papers, idea, client):
 
 st.title("⚖️ Paper Scoring & Selection Dashboard")
 
-# Initialize selection state if it doesn't exist
+# Initialize selection state
 if "selected_paper_ids" not in st.session_state:
     st.session_state.selected_paper_ids = set()
 
@@ -80,56 +80,68 @@ else:
                 top_50 = llm_filter_stage_1(papers[:300], idea, client)
                 scored_papers = llm_score_stage_2(top_50, idea, client)
                 st.session_state.scored_papers = scored_papers
-                # Reset selections on new run
-                st.session_state.selected_paper_ids = set()
+                st.session_state.selected_paper_ids = set() # Reset
             st.rerun()
 
     # --- DISPLAY LOGIC ---
     if "scored_papers" in st.session_state:
         scored = st.session_state.scored_papers
         
-        categories = {
-            "Research Article": {"label": "Research Papers", "color": "blue"},
-            "Review Paper": {"label": "Review Papers", "color": "green"},
-            "Thesis": {"label": "Theses", "color": "orange"}
-        }
+        # Mapping categories and limits based on your drawing
+        categories = [
+            {"key": "Research Article", "label": "Research Papers", "limit": 30},
+            {"key": "Review Paper", "label": "Review Papers", "limit": 5},
+            {"key": "Thesis", "label": "Theses", "limit": 5}
+        ]
 
-        for cat_key, cat_info in categories.items():
-            st.header(f"📂 {cat_info['label']}")
+        for cat in categories:
+            st.header(f"📂 {cat['label']}")
             
-            # Filter papers for this category and sort by score
+            # Filter and sort papers by score
             cat_papers = sorted(
-                [p for p in scored if p['category'] == cat_key], 
+                [p for p in scored if p['category'] == cat['key']], 
                 key=lambda x: x.get('relevance_score', 0), 
                 reverse=True
             )
 
             col_selected, col_candidates = st.columns([1, 1])
 
+            # LEFT COLUMN: Selected (Inward/Outward - Outward logic)
             with col_selected:
-                st.subheader("✅ Selected")
+                st.subheader(f"✅ Selected {cat['label']}")
                 selected_in_cat = [p for p in cat_papers if p['id'] in st.session_state.selected_paper_ids]
+                
                 if not selected_in_cat:
-                    st.caption("No papers selected yet.")
+                    st.caption("No papers selected.")
+                
                 for p in selected_in_cat:
-                    st.info(f"**{p['relevance_score']}%** - {p['title']}")
+                    cols = st.columns([0.85, 0.15])
+                    cols[0].info(f"**{p['relevance_score']}%** - {p['title']}")
+                    # REMOVE Button (Move Outward)
+                    if cols[1].button("🗑️", key=f"rem_{p['id']}"):
+                        st.session_state.selected_paper_ids.remove(p['id'])
+                        st.rerun()
 
+            # RIGHT COLUMN: Candidates (Inward logic)
             with col_candidates:
-                st.subheader("🔍 Best Candidates (Not Selected)")
+                st.subheader(f"🔍 Best {cat['limit']} Candidates")
                 remaining_in_cat = [p for p in cat_papers if p['id'] not in st.session_state.selected_paper_ids]
                 
-                # We limit the view as requested (e.g., top 30 research, 5 reviews, 5 thesis)
-                limit = 30 if cat_key == "Research Article" else 5
+                # Show only up to the limit specified
+                display_list = remaining_in_cat[:cat['limit']]
                 
-                for p in remaining_in_cat[:limit]:
-                    # Using checkboxes to move papers
-                    if st.checkbox(f"{p['relevance_score']}% - {p['title']}", key=f"chk_{p['id']}"):
+                if not display_list:
+                    st.caption("No candidates available.")
+                
+                for p in display_list:
+                    # CHECKBOX to move Inward
+                    # Using a unique key combining category and ID to prevent the error in the screenshot
+                    if st.checkbox(f"{p['relevance_score']}% - {p['title']}", key=f"chk_{cat['key']}_{p['id']}"):
                         st.session_state.selected_paper_ids.add(p['id'])
                         st.rerun()
 
             st.divider()
 
-        # Full list view at the bottom
-        with st.expander("📋 View All Scored Data"):
-            for p in scored:
-                st.write(f"**{p['relevance_score']}%** | {p['category']} | {p['title']}")
+        # Full list view
+        with st.expander("📋 View All Raw Scored Data"):
+            st.table([{"Score": p['relevance_score'], "Type": p['category'], "Title": p['title']} for p in scored])
