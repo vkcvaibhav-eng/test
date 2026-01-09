@@ -75,7 +75,7 @@ if "selected_paper_ids" not in st.session_state:
 if "all_papers" not in st.session_state or not st.session_state.all_papers:
     st.warning("⚠️ No papers found. Please run the search on the 'Search Engine' page first.")
     if st.button("Back to Search"):
-        st.switch_page("search_engine.py")
+        st.switch_page("pages/search_engine.py")
 else:
     papers = st.session_state.all_papers
     idea = st.session_state.get("search_idea", "General Research")
@@ -141,7 +141,6 @@ else:
                 
                 for p in display_list:
                     # FIX 3: Ensured the checkbox key is unique by including category and ID
-                    # We check if the ID is already in the set to determine value
                     is_selected = p['id'] in st.session_state.selected_paper_ids
                     if st.checkbox(f"{p['relevance_score']}% - {p['title']}", 
                                    value=is_selected,
@@ -150,12 +149,20 @@ else:
                             st.session_state.selected_paper_ids.add(p['id'])
                             st.rerun()
                     elif is_selected:
-                        # This handles the case if they uncheck it from the candidate side
                         st.session_state.selected_paper_ids.remove(p['id'])
                         st.rerun()
 
             st.divider()
 
+        # --- INTEGRATION: PAGE 4 NAVIGATION ---
+        st.markdown("### 🏁 Final Step")
+        if st.session_state.selected_paper_ids:
+            st.success(f"Ready! You have selected {len(st.session_state.selected_paper_ids)} papers for deep analysis.")
+            if st.button("🚀 Proceed to Page 4: Deep Analysis", type="primary"):
+                # Data is already in session_state, just navigate
+                st.switch_page("pages/4_Deep_Analysis.py")
+        else:
+            st.warning("Please select at least one paper to continue to Page 4.")
+
         with st.expander("📋 View All Raw Scored Data"):
             st.table([{"Score": p['relevance_score'], "Type": p['category'], "Title": p['title']} for p in scored])
-    st.session_state['selected_papers'] = list_of_chosen_papers
