@@ -154,15 +154,16 @@ else:
 
             st.divider()
 
-        # --- INTEGRATION: PAGE 4 NAVIGATION ---
-        st.markdown("### 🏁 Final Step")
-        if st.session_state.selected_paper_ids:
-            st.success(f"Ready! You have selected {len(st.session_state.selected_paper_ids)} papers for deep analysis.")
-            if st.button("🚀 Proceed to Page 4: Deep Analysis", type="primary"):
-                # Data is already in session_state, just navigate
-                st.switch_page("pages/4_Deep_Analysis.py")
-        else:
-            st.warning("Please select at least one paper to continue to Page 4.")
-
-        with st.expander("📋 View All Raw Scored Data"):
-            st.table([{"Score": p['relevance_score'], "Type": p['category'], "Title": p['title']} for p in scored])
+     # --- INTEGRATION: PAGE 4 NAVIGATION ---
+st.markdown("### 🏁 Final Step")
+if st.session_state.selected_paper_ids:
+    st.success(f"Ready! You have selected {len(st.session_state.selected_paper_ids)} papers for deep analysis.")
+    if st.button("🚀 Proceed to Page 4: Deep Analysis", type="primary"):
+        # IMPORTANT: This filename MUST exist in your /pages folder exactly as written
+        # If your file is named "deep_analysis.py", change this to "pages/deep_analysis.py"
+        try:
+            st.switch_page("pages/4_Deep_Analysis.py") 
+        except Exception:
+            st.error("Error: Could not find 'pages/4_Deep_Analysis.py'. Please check your filename!")
+else:
+    st.warning("Please select at least one paper to continue to Page 4.")
