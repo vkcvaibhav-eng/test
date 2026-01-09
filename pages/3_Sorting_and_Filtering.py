@@ -154,16 +154,12 @@ else:
 
             st.divider()
 
-     # --- INTEGRATION: PAGE 4 NAVIGATION ---
+   # --- INTEGRATION: PAGE 4 NAVIGATION ---
 st.markdown("### 🏁 Final Step")
-if st.session_state.selected_paper_ids:
-    st.success(f"Ready! You have selected {len(st.session_state.selected_paper_ids)} papers for deep analysis.")
+if st.session_state.get("selected_paper_ids"):
+    st.success(f"Ready! You have selected {len(st.session_state.selected_paper_ids)} papers.")
     if st.button("🚀 Proceed to Page 4: Deep Analysis", type="primary"):
-        # IMPORTANT: This filename MUST exist in your /pages folder exactly as written
-        # If your file is named "deep_analysis.py", change this to "pages/deep_analysis.py"
-        try:
-            st.switch_page("pages/4_Deep_Analysis.py") 
-        except Exception:
-            st.error("Error: Could not find 'pages/4_Deep_Analysis.py'. Please check your filename!")
+        # MUST match your filename exactly: 4_deep_analysis.py
+        st.switch_page("pages/4_deep_analysis.py") 
 else:
-    st.warning("Please select at least one paper to continue to Page 4.")
+    st.warning("Please select at least one paper to continue.")
