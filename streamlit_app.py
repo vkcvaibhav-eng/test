@@ -5,140 +5,239 @@ from logic import generate_ideas_deepseek, select_and_score_openai
 
 st.set_page_config(page_title="AI Idea Dashboard", layout="centered")
 
+# ==================== INITIALIZE SESSION STATE ====================
+# Initialize all session state variables at the start
 if "passed_idea" not in st.session_state:
     st.session_state.passed_idea = ""
 
+if "deepseek_key" not in st.session_state:
+    st.session_state.deepseek_key = ""
+
+if "openai_key" not in st.session_state:
+    st.session_state.openai_key = ""
+
+if "serpapi_key" not in st.session_state:
+    st.session_state.serpapi_key = ""
+
+if "semantic_key" not in st.session_state:
+    st.session_state.semantic_key = ""
+
+if "core_key" not in st.session_state:
+    st.session_state.core_key = ""
+
+# ==================== SIDEBAR - API KEYS ====================
 with st.sidebar:
     st.header("🔑 API Settings")
     
     # Page 1 APIs
-    deepseek_key = st.text_input("DeepSeek API Key", type="password")
-    openai_key = st.text_input("OpenAI Key", type="password")
+    st.subheader("Idea Generation")
+    deepseek_key = st.text_input(
+        "DeepSeek API Key", 
+        type="password",
+        value=st.session_state.deepseek_key,
+        key="input_deepseek"
+    )
+    if deepseek_key:
+        st.session_state.deepseek_key = deepseek_key
+    
+    openai_key = st.text_input(
+        "OpenAI Key", 
+        type="password",
+        value=st.session_state.openai_key,
+        key="input_openai"
+    )
+    if openai_key:
+        st.session_state.openai_key = openai_key
     
     st.divider()
     
     # Page 2 APIs
-    st.subheader("Search Engine APIs")
-    serp_key = st.text_input("SerpAPI Key", type="password")
-    semantic_key = st.text_input("Semantic Scholar Key (Optional)", type="password")
+    st.subheader("Search Engine")
+    serp_key = st.text_input(
+        "SerpAPI Key", 
+        type="password",
+        value=st.session_state.serpapi_key,
+        key="input_serp"
+    )
+    if serp_key:
+        st.session_state.serpapi_key = serp_key
+    
+    semantic_key = st.text_input(
+        "Semantic Scholar Key (Optional)", 
+        type="password",
+        value=st.session_state.semantic_key,
+        key="input_semantic"
+    )
+    if semantic_key:
+        st.session_state.semantic_key = semantic_key
     
     st.divider()
     
     # Page 4 APIs
-    st.subheader("Download APIs (Optional)")
-    core_key = st.text_input("CORE API Key (Optional)", type="password")
-    
-    st.caption("💡 Get free CORE API key from core.ac.uk")
-    
-    # Save API keys to session state for other pages
-    if serp_key:
-        st.session_state.serpapi_key = serp_key
-    if semantic_key:
-        st.session_state.semantic_key = semantic_key
+    st.subheader("PDF Download")
+    core_key = st.text_input(
+        "CORE API Key (Optional)", 
+        type="password",
+        value=st.session_state.core_key,
+        key="input_core"
+    )
     if core_key:
         st.session_state.core_key = core_key
     
+    st.caption("💡 Get free CORE API: core.ac.uk")
+    
     st.divider()
     
-    # Workflow Status
-    st.subheader("📊 Workflow Progress")
+    # ==================== WORKFLOW STATUS ====================
+    st.subheader("📊 Progress Tracker")
+    
+    progress_steps = []
     
     if st.session_state.get("passed_idea"):
-        st.success("✅ Idea Generated")
+        progress_steps.append("✅ Idea Generated")
     
-    if "all_papers" in st.session_state:
-        st.success(f"✅ {len(st.session_state.all_papers)} Papers Found")
+    if st.session_state.get("all_papers"):
+        progress_steps.append(f"✅ {len(st.session_state.all_papers)} Papers Found")
     
-    if "scored_papers" in st.session_state:
-        st.success(f"✅ {len(st.session_state.scored_papers)} Papers Scored")
+    if st.session_state.get("scored_papers"):
+        progress_steps.append(f"✅ {len(st.session_state.scored_papers)} Papers Scored")
     
-    if "selected_paper_ids" in st.session_state and st.session_state.selected_paper_ids:
-        st.success(f"✅ {len(st.session_state.selected_paper_ids)} Papers Selected")
+    if st.session_state.get("selected_paper_ids") and st.session_state.selected_paper_ids:
+        progress_steps.append(f"✅ {len(st.session_state.selected_paper_ids)} Papers Selected")
     
-    if "download_results" in st.session_state:
+    if st.session_state.get("download_results"):
         results = st.session_state.download_results
-        st.metric("📥 PDFs Downloaded", results.get('success_count', 0))
-        st.metric("❌ Failed", results.get('failed_count', 0))
+        progress_steps.append(f"✅ {results.get('success_count', 0)} PDFs Downloaded")
+    
+    if progress_steps:
+        for step in progress_steps:
+            st.success(step)
+    else:
+        st.info("👆 Enter API keys to start")
+
+# ==================== MAIN CONTENT ====================
 
 st.title("💡 Idea Generation Dashboard")
 
 with st.container(border=True):
-    title = st.text_input("Project Title")
-    search_title = st.text_input("Search Title")
-    tongue_use = st.text_input("Tongue Use")
+    title = st.text_input("Project Title", placeholder="e.g., Pest Management in Cotton")
+    search_title = st.text_input("Search Title", placeholder="e.g., Integrated Pest Management")
+    tongue_use = st.text_input("Tongue Use", placeholder="e.g., Technical, Academic")
 
-# --- CLEAN GENERATE LOGIC ---
-if st.button("Generate & Process", type="primary"):
-    if not deepseek_key or not openai_key:
-        st.error("Please enter both API keys.")
+# ==================== GENERATE LOGIC ====================
+if st.button("Generate & Process Ideas", type="primary"):
+    if not st.session_state.deepseek_key or not st.session_state.openai_key:
+        st.error("❌ Please enter both DeepSeek and OpenAI API keys in the sidebar.")
     else:
-        with st.spinner("Processing..."):
-            raw_ideas = generate_ideas_deepseek(deepseek_key, title, search_title, tongue_use)
-            best_idea, clout = select_and_score_openai(openai_key, raw_ideas, title, search_title)
-            
-            # Save for Page 2 and Page 3
-            st.session_state.passed_idea = best_idea
-            st.session_state.openai_key = openai_key
-            
-            st.subheader("Selected Best Idea")
-            with st.container(border=True):
-                st.markdown(best_idea)
-                st.metric(label="Clout Score", value=f"{clout}%")
+        with st.spinner("🔄 Generating ideas..."):
+            try:
+                raw_ideas = generate_ideas_deepseek(
+                    st.session_state.deepseek_key, 
+                    title, 
+                    search_title, 
+                    tongue_use
+                )
+                
+                best_idea, clout = select_and_score_openai(
+                    st.session_state.openai_key, 
+                    raw_ideas, 
+                    title, 
+                    search_title
+                )
+                
+                # Save to session state
+                st.session_state.passed_idea = best_idea
+                
+                st.subheader("✨ Selected Best Idea")
+                with st.container(border=True):
+                    st.markdown(best_idea)
+                    st.metric(label="Clout Score", value=f"{clout}%")
+                
+                st.success("✅ Idea generated successfully! Proceed to next step.")
+                
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
 
-# --- NAVIGATION SECTION ---
+# ==================== NAVIGATION ====================
 st.divider()
 st.subheader("🚀 Workflow Navigation")
 
-col1, col2, col3, col4 = st.columns(4)
+nav_col1, nav_col2, nav_col3, nav_col4 = st.columns(4)
 
-with col1:
+with nav_col1:
     if st.session_state.get("passed_idea"):
         if st.button("📚 Search Papers", use_container_width=True):
             st.switch_page("pages/search_engine.py")
     else:
         st.button("📚 Search Papers", disabled=True, use_container_width=True)
-        st.caption("Generate idea first")
+        st.caption("⬆️ Generate idea first")
 
-with col2:
-    if "all_papers" in st.session_state:
-        if st.button("⚖️ Score & Filter", use_container_width=True):
+with nav_col2:
+    if st.session_state.get("all_papers"):
+        if st.button("⚖️ Score & Select", use_container_width=True):
             st.switch_page("pages/3_Sorting_and_Filtering.py")
     else:
-        st.button("⚖️ Score & Filter", disabled=True, use_container_width=True)
-        st.caption("Run search first")
+        st.button("⚖️ Score & Select", disabled=True, use_container_width=True)
+        st.caption("⬆️ Search papers first")
 
-with col3:
-    if "selected_paper_ids" in st.session_state and st.session_state.selected_paper_ids:
+with nav_col3:
+    if st.session_state.get("selected_paper_ids") and st.session_state.selected_paper_ids:
         if st.button("📥 Download PDFs", use_container_width=True, type="primary"):
             st.switch_page("pages/4_PDF_Downloader.py")
     else:
         st.button("📥 Download PDFs", disabled=True, use_container_width=True)
-        st.caption("Select papers first")
+        st.caption("⬆️ Select papers first")
 
-with col4:
-    if "download_results" in st.session_state:
+with nav_col4:
+    if st.session_state.get("download_results"):
         results = st.session_state.download_results
-        if st.button(f"📊 View Results ({results['success_count']})", use_container_width=True):
+        if st.button(f"📊 Results ({results.get('success_count', 0)})", use_container_width=True):
             st.switch_page("pages/4_PDF_Downloader.py")
     else:
-        st.button("📊 View Results", disabled=True, use_container_width=True)
-        st.caption("Download first")
+        st.button("📊 Results", disabled=True, use_container_width=True)
+        st.caption("⬆️ Download first")
 
-# --- QUICK STATS ---
+# ==================== QUICK STATS ====================
 if any(key in st.session_state for key in ["all_papers", "scored_papers", "selected_paper_ids"]):
     st.divider()
-    st.subheader("📈 Quick Stats")
+    st.subheader("📈 Workflow Statistics")
     
-    stat_col1, stat_col2, stat_col3 = st.columns(3)
+    stat1, stat2, stat3, stat4 = st.columns(4)
     
-    with stat_col1:
+    with stat1:
         papers_found = len(st.session_state.get("all_papers", []))
         st.metric("Papers Found", papers_found)
     
-    with stat_col2:
+    with stat2:
         papers_scored = len(st.session_state.get("scored_papers", []))
         st.metric("Papers Scored", papers_scored)
     
-    with stat_col3:
-        papers_selected = len(st.session_state.get("selected_paper_ids", []))
-        st.metric("Papers Selected", papers_selected)
+    with stat3:
+        papers_selected = len(st.session_state.get("selected_paper_ids", set()))
+        st.metric("Selected", papers_selected)
+    
+    with stat4:
+        if "download_results" in st.session_state:
+            downloaded = st.session_state.download_results.get("success_count", 0)
+            st.metric("Downloaded", downloaded)
+        else:
+            st.metric("Downloaded", 0)
+
+# ==================== FOOTER ====================
+st.divider()
+with st.expander("ℹ️ How to Use This App"):
+    st.markdown("""
+    **Workflow Steps:**
+    1. **Enter API Keys** in the sidebar (they will be remembered)
+    2. **Generate Idea** - Fill in project details and click "Generate & Process"
+    3. **Search Papers** - Navigate to Page 2 to search for research papers
+    4. **Score & Select** - Go to Page 3 to filter and select relevant papers
+    5. **Download PDFs** - Finally, download selected papers on Page 4
+    
+    **Required API Keys:**
+    - DeepSeek: For idea generation
+    - OpenAI: For idea scoring and paper analysis
+    - SerpAPI: For Google Scholar and KrishiKosh search
+    - Semantic Scholar (Optional): For additional papers
+    - CORE API (Optional): For better PDF download success
+    """)
