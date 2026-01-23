@@ -6,31 +6,41 @@ from serpapi import GoogleSearch
 
 st.set_page_config(page_title="Internal PDF Fetcher", layout="wide")
 
-# ==================== DOWNLOAD STRATEGIES ====================
+# ==================== HELPERS ====================
 
-def strategy_1_core_api(paper, core_key=None):
-    """Strategy 1: CORE API (Official Open Access)"""
-    if not core_key: return None
+def download_file(url):
+    """Helper to download and return bytes if it is a PDF"""
     try:
-        url = "https://api.core.ac.uk/v3/search/works"
-        headers = {"Authorization": f"Bearer {core_key}"}
-        # Search by title
-        params = {"q": paper['title'], "limit": 1}
-        response = requests.post(url, json=params, headers=headers, timeout=10)
+        # Mimic a real browser to avoid being blocked
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/pdf,application/x-download,text/html,application/xhtml+xml',
+            'Referer': 'https://scholar.google.com/'
+        }
+        response = requests.get(url, headers=headers, timeout=25, verify=False, stream=True)
+        
+        # Check if content type is PDF
+        content_type = response.headers.get('Content-Type', '').lower()
         if response.status_code == 200:
-            results = response.json().get('results', [])
-            if results and results[0].get('downloadUrl'):
-                return download_file(results[0]['downloadUrl'])
-    except: pass
+            if 'pdf' in content_type or response.content.startswith(b'%PDF'):
+                if len(response.content) > 2000: # Ignore tiny error files
+                    return response.content
+    except: 
+        pass
     return None
 
-def strategy_2_serpapi_scholar(paper, serp_key=None):
+# ==================== DOWNLOAD STRATEGIES ====================
+
+def strategy_1_serpapi_deep(paper, serp_key):
     """
-    Strategy 2: Google Scholar via SerpAPI (The 'Heavy Hitter')
-    Finds direct [PDF] links hosted on ResearchGate, Universities, etc.
+    Strategy 1: SerpAPI 'Deep Search' (The Heavy Hitter).
+    1. Checks the main result for a [PDF] link.
+    2. If failed, it searches 'All Versions' (cluster_id) to find a free one.
     """
     if not serp_key: return None
+    
     try:
+        # STEP 1: Search for the specific title
         params = {
             "engine": "google_scholar",
             "q": paper['title'],
@@ -40,134 +50,146 @@ def strategy_2_serpapi_scholar(paper, serp_key=None):
         search = GoogleSearch(params)
         results = search.get_dict()
         
-        if "organic_results" in results:
-            for res in results["organic_results"]:
-                # Check for "resources" (the [PDF] link on the right side)
-                if "resources" in res:
-                    for resource in res["resources"]:
-                        if resource.get("file_format") == "PDF" and resource.get("link"):
-                            return download_file(resource["link"])
-                
-                # Check for inline links
-                if "inline_links" in res and "cited_by" in res["inline_links"]:
-                     # Sometimes PDF links are buried here, but 'resources' is the main one
-                     pass
+        if "organic_results" not in results:
+            return None
+
+        primary_result = results["organic_results"][0]
+        
+        # Check 1: Does the main result have a direct PDF?
+        if "resources" in primary_result:
+            for resource in primary_result["resources"]:
+                if resource.get("file_format") == "PDF" and resource.get("link"):
+                    st.write(f"   ↳ Found direct link via SerpAPI...")
+                    pdf = download_file(resource["link"])
+                    if pdf: return pdf
+
+        # Check 2: 'All Versions' Deep Dive (The "Forced" Method)
+        # If we didn't find a PDF yet, check if there are other versions (e.g., "All 6 versions")
+        cluster_id = primary_result.get("publication_info", {}).get("cites_id")
+        if not cluster_id:
+             # Fallback: sometimes cluster_id is elsewhere or named differently
+             pass
+        else:
+            st.write(f"   ↳ Checking alternative versions...")
+            # Search specifically within this cluster for anything with a PDF
+            params_cluster = {
+                "engine": "google_scholar",
+                "q": "", # Empty q because we use cluster_id
+                "cluster": cluster_id,
+                "api_key": serp_key,
+                "num": 5 # Check top 5 versions
+            }
+            search_cluster = GoogleSearch(params_cluster)
+            cluster_results = search_cluster.get_dict()
+            
+            if "organic_results" in cluster_results:
+                for res in cluster_results["organic_results"]:
+                    if "resources" in res:
+                        for resource in res["resources"]:
+                            if resource.get("file_format") == "PDF" and resource.get("link"):
+                                st.write(f"   ↳ Found free version in alternatives!")
+                                pdf = download_file(resource["link"])
+                                if pdf: return pdf
+
     except Exception as e:
-        # st.error(f"SerpAPI Error: {e}") 
+        # st.write(f"SerpAPI Error: {e}")
         pass
     return None
 
-def strategy_3_krishikosh_smart(paper):
-    """Strategy 3: Smart KrishiKosh Scraper for Theses"""
+def strategy_2_krishikosh_smart(paper):
+    """Strategy 2: Smart KrishiKosh Scraper (Specific for Theses)"""
     link = paper.get('link', '')
     
-    # Only run if it looks like a KrishiKosh handle
-    if 'krishikosh.egranth.ac.in' in link or 'handle' in link:
+    # Trigger only if domain matches or it's categorized as Thesis
+    if 'krishikosh' in link or 'Thesis' in paper.get('category', ''):
         try:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            # 1. Go to the handle page
-            response = requests.get(link, headers=headers, timeout=10)
-            
-            # 2. Look for the "bitstream" links in the HTML
-            # Pattern: /bitstream/handle/123456789/1234/thesis.pdf?sequence=1
-            matches = re.findall(r'href=["\'](/bitstream/[^"\']+\.pdf[^"\']*)["\']', response.text)
-            
-            # 3. Sort matches (prefer 'thesis.pdf' or larger files usually at the end)
-            for match in matches:
-                # Construct full URL
-                full_url = f"https://krishikosh.egranth.ac.in{match}" if match.startswith('/') else match
+            # If we have a handle link, scrape it
+            if 'handle' in link:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                response = requests.get(link, headers=headers, timeout=15)
+                # Look for bitstream links (standard DSpace pattern)
+                # Matches: /bitstream/handle/123/456/thesis.pdf
+                matches = re.findall(r'href=["\'](/bitstream/[^"\']+\.pdf[^"\']*)["\']', response.text)
                 
-                # Try downloading
-                file_data = download_file(full_url)
-                if file_data:
-                    return file_data
+                for match in matches:
+                    full_url = f"https://krishikosh.egranth.ac.in{match}"
+                    pdf = download_file(full_url)
+                    if pdf: return pdf
+            
+            # Fallback: Try guessing the standard URL structure
+            if '/handle/' in link:
+                handle_id = link.split('/handle/')[-1]
+                # Try ID/1 to ID/4
+                for i in range(1, 4): 
+                    guess_url = f"http://krishikosh.egranth.ac.in/bitstream/1/{handle_id}/{i}/thesis.pdf"
+                    pdf = download_file(guess_url)
+                    if pdf: return pdf
         except: pass
     return None
 
+def strategy_3_core_api(paper, core_key=None):
+    """Strategy 3: CORE API (Open Access)"""
+    if not core_key: return None
+    try:
+        url = "https://api.core.ac.uk/v3/search/works"
+        headers = {"Authorization": f"Bearer {core_key}"}
+        params = {"q": paper['title'], "limit": 1}
+        response = requests.post(url, json=params, headers=headers, timeout=10)
+        if response.status_code == 200:
+            results = response.json().get('results', [])
+            if results and results[0].get('downloadUrl'):
+                return download_file(results[0]['downloadUrl'])
+    except: pass
+    return None
+
 def strategy_4_unpaywall(paper):
-    """Strategy 4: Unpaywall API (DOI resolver)"""
+    """Strategy 4: Unpaywall (DOI Resolver)"""
     link = paper.get('link', '')
     doi = None
-    
-    # Extract DOI from link or snippet
     if 'doi.org/' in link:
         doi = link.split('doi.org/')[-1]
     
     if doi:
         try:
-            url = f"https://api.unpaywall.org/v2/{doi}?email=research@university.edu"
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                # Check best location
-                if data.get('best_oa_location') and data['best_oa_location'].get('url_for_pdf'):
+            url = f"https://api.unpaywall.org/v2/{doi}?email=research@agri.com"
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get('best_oa_location', {}).get('url_for_pdf'):
                     return download_file(data['best_oa_location']['url_for_pdf'])
-                # Check other locations
-                for loc in data.get('oa_locations', []):
-                     if loc.get('url_for_pdf'):
-                        return download_file(loc['url_for_pdf'])
         except: pass
     return None
 
-def strategy_5_semantic_scholar(paper):
-    """Strategy 5: Semantic Scholar Public API"""
-    try:
-        url = "https://api.semanticscholar.org/graph/v1/paper/search"
-        params = {"query": paper['title'], "fields": "openAccessPdf", "limit": 1}
-        response = requests.get(url, params=params, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('data') and data['data'][0].get('openAccessPdf'):
-                return download_file(data['data'][0]['openAccessPdf']['url'])
-    except: pass
-    return None
-
-def strategy_6_general_scrape(paper):
-    """Strategy 6: Fallback - Check if the main link is a PDF"""
+def strategy_5_fallback_scrape(paper):
+    """Strategy 5: General 'Try everything' scrape"""
     link = paper.get('link', '')
     if not link: return None
     
-    # Case A: Link is already a PDF
+    # 1. Is the link itself a PDF?
     if link.lower().endswith('.pdf'):
         return download_file(link)
         
-    # Case B: Link is arXiv
+    # 2. Is it arXiv?
     if 'arxiv.org' in link:
         arxiv_id = link.split('/')[-1]
         return download_file(f"https://arxiv.org/pdf/{arxiv_id}.pdf")
-        
-    return None
 
-# ==================== DOWNLOAD HELPER ====================
-
-def download_file(url):
-    """Helper to download and return bytes if it is a PDF"""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        # Allow redirects is True by default in requests
-        response = requests.get(url, headers=headers, timeout=20, verify=False) 
-        
-        if response.status_code == 200:
-            # Check content type or signature
-            if 'application/pdf' in response.headers.get('Content-Type', '') or response.content.startswith(b'%PDF'):
-                if len(response.content) > 2000: # Ensure it's not a tiny error file
-                    return response.content
-    except: pass
     return None
 
 # ==================== MAIN UI ====================
 
-st.title("📥 Intelligent PDF Fetcher")
-st.markdown("Fetching full-text PDFs into memory using **CORE, SerpAPI (Scholar), Unpaywall, and Smart Scraping**.")
+st.title("📥 Ultimate PDF Fetcher")
+st.markdown("""
+Attempts to force-fetch full text using **Deep Search**.
+For maximum success, enter a **SerpAPI Key** below.
+""")
 
 # Initialize Session State
 if "downloaded_papers" not in st.session_state:
     st.session_state.downloaded_papers = {} 
 
 if "selected_paper_ids" not in st.session_state or not st.session_state.selected_paper_ids:
-    st.warning("⚠️ No papers selected. Please go back to Sorting.")
+    st.warning("⚠️ No papers selected.")
     st.stop()
 
 # Get selected papers
@@ -176,95 +198,87 @@ selected_papers = [p for p in all_scored if p['id'] in st.session_state.selected
 
 # Stats
 col1, col2, col3 = st.columns(3)
-col1.metric("Selected Papers", len(selected_papers))
+col1.metric("Selected", len(selected_papers))
 already_in_mem = len([p for p in selected_papers if p['id'] in st.session_state.downloaded_papers])
-col2.metric("Ready in Memory", already_in_mem)
-col3.metric("Pending", len(selected_papers) - already_in_mem)
+col2.metric("Downloaded", already_in_mem)
+col3.metric("Missing", len(selected_papers) - already_in_mem)
 
 st.divider()
 
 # API Key Inputs
-with st.expander("⚙️ **Unlock Maximum Success (API Keys)**", expanded=True):
+with st.expander("⚙️ **Unlock 'Forced' Mode (API Keys)**", expanded=True):
     col_a, col_b = st.columns(2)
     with col_a:
-        core_key = st.text_input("CORE API Key (Excellent for OA)", type="password", 
-                                value=st.session_state.get("core_key", ""))
+        serp_key = st.text_input("SerpAPI Key (REQUIRED for 'Deep Search')", type="password", 
+                                value=st.session_state.get("serpapi_key", ""),
+                                help="Get this at serpapi.com. It finds hidden PDF links on Google Scholar.")
     with col_b:
-        serp_key = st.text_input("SerpAPI Key (Crucial for Paywalled/Hidden)", type="password", 
-                                value=st.session_state.get("serpapi_key", ""))
-        st.caption("ℹ️ Finds PDF links on Google Scholar (ResearchGate, Universities).")
+        core_key = st.text_input("CORE API Key (Optional)", type="password", 
+                                value=st.session_state.get("core_key", ""),
+                                help="Get at core.ac.uk. Good for official Open Access.")
 
-# ==================== EXECUTION LOGIC ====================
+# ==================== EXECUTION ====================
 
-start_btn = st.button("🚀 Start Deep Fetching", type="primary", use_container_width=True)
-
-if start_btn:
+if st.button("🚀 Start Forced Download", type="primary", use_container_width=True):
+    
     progress_bar = st.progress(0)
-    status_container = st.container(border=True)
+    status_box = st.container(border=True)
     success_count = 0
     
-    with status_container:
+    with status_box:
         for idx, paper in enumerate(selected_papers):
-            # Skip if done
             if paper['id'] in st.session_state.downloaded_papers:
                 success_count += 1
                 continue
             
-            st.write(f"🔄 **{paper['title'][:50]}...**")
+            st.write(f"🔎 **{paper['title'][:60]}...**")
             
             pdf_bytes = None
-            used_strategy = "None"
+            method = "None"
             
-            # STRATEGY 1: KRISHIKOSH (If it's a thesis, prioritize this)
-            if not pdf_bytes and "Thesis" in paper.get('category', ''):
-                 pdf_bytes = strategy_3_krishikosh_smart(paper)
-                 used_strategy = "KrishiKosh Smart"
-
-            # STRATEGY 2: SERPAPI (Google Scholar - The Heavy Hitter)
-            if not pdf_bytes:
-                pdf_bytes = strategy_2_serpapi_scholar(paper, serp_key)
-                used_strategy = "Google Scholar (SerpAPI)"
+            # --- PRIORITY 1: THESIS SPECIALIST ---
+            if "Thesis" in paper.get('category', ''):
+                pdf_bytes = strategy_2_krishikosh_smart(paper)
+                method = "KrishiKosh Scraper"
             
-            # STRATEGY 3: CORE API
+            # --- PRIORITY 2: SERPAPI DEEP SEARCH (The "Forced" method) ---
+            if not pdf_bytes and serp_key:
+                pdf_bytes = strategy_1_serpapi_deep(paper, serp_key)
+                method = "SerpAPI Deep Search"
+            
+            # --- PRIORITY 3: CORE / UNPAYWALL ---
             if not pdf_bytes:
-                pdf_bytes = strategy_1_core_api(paper, core_key)
-                used_strategy = "CORE API"
+                pdf_bytes = strategy_3_core_api(paper, core_key)
+                method = "CORE API"
                 
-            # STRATEGY 4: UNPAYWALL
             if not pdf_bytes:
                 pdf_bytes = strategy_4_unpaywall(paper)
-                used_strategy = "Unpaywall"
-                
-            # STRATEGY 5: SEMANTIC SCHOLAR
-            if not pdf_bytes:
-                pdf_bytes = strategy_5_semantic_scholar(paper)
-                used_strategy = "Semantic Scholar"
-                
-            # STRATEGY 6: FALLBACK SCRAPE
-            if not pdf_bytes:
-                pdf_bytes = strategy_6_general_scrape(paper)
-                used_strategy = "Direct Link"
+                method = "Unpaywall"
             
-            # SAVE RESULT
+            # --- PRIORITY 4: LAST RESORT ---
+            if not pdf_bytes:
+                pdf_bytes = strategy_5_fallback_scrape(paper)
+                method = "Direct Scrape"
+            
+            # --- SAVE OR FAIL ---
             if pdf_bytes:
                 st.session_state.downloaded_papers[paper['id']] = {
                     'title': paper['title'],
                     'category': paper.get('category', 'Research'),
                     'bytes': pdf_bytes,
-                    'source': used_strategy,
+                    'source': method,
                     'file_size': f"{len(pdf_bytes)/1024/1024:.2f} MB"
                 }
-                st.success(f"   ✅ Found via {used_strategy}")
+                st.success(f"   ✅ Acquired via {method}")
                 success_count += 1
             else:
-                st.error(f"   ❌ Could not find PDF")
+                st.error("   ❌ Failed to locate full text.")
                 
             progress_bar.progress((idx + 1) / len(selected_papers))
-            time.sleep(0.5)
-
-    st.success(f"🎉 Process Complete! {success_count}/{len(selected_papers)} papers acquired.")
+            
+    st.success(f"🎉 Operation Complete! {success_count}/{len(selected_papers)} papers available.")
     if success_count > 0:
-        time.sleep(1)
+        time.sleep(1.5)
         st.rerun()
 
 # ==================== NEXT STEP ====================
