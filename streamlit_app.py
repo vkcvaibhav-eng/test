@@ -2,6 +2,8 @@
 
 import streamlit as st
 from logic import generate_ideas_deepseek, select_and_score_openai
+from openai import OpenAI
+import json
 
 st.set_page_config(page_title="AI Idea Dashboard", layout="centered")
 
@@ -9,6 +11,14 @@ st.set_page_config(page_title="AI Idea Dashboard", layout="centered")
 # Initialize all session state variables at the start
 if "passed_idea" not in st.session_state:
     st.session_state.passed_idea = ""
+
+# NEW: Initialize the specific search formats
+if "search_payload" not in st.session_state:
+    st.session_state.search_payload = {
+        "general": [],
+        "review": "",
+        "thesis": ""
+    }
 
 if "deepseek_key" not in st.session_state:
     st.session_state.deepseek_key = ""
@@ -24,6 +34,38 @@ if "semantic_key" not in st.session_state:
 
 if "core_key" not in st.session_state:
     st.session_state.core_key = ""
+
+# ==================== HELPER FUNCTION ====================
+def transform_idea_for_search(client, idea):
+    """
+    Transforms the core idea into 3 specific search formats:
+    1. 3 Short Sentences (General)
+    2. Review Paper Query
+    3. Thesis/KrishiKosh Query
+    """
+    prompt = f"""
+    Analyze this research idea: "{idea}"
+    
+    Output a JSON object with exactly these keys:
+    1. "general_sentences": A list of exactly 3 short, distinct, keyword-heavy sentences suitable for a search engine.
+    2. "review_query": A single search query optimized to find "Review Papers" or "State of Art" on this topic.
+    3. "thesis_query": A single search query optimized to find "Theses", "Dissertations" or "KrishiKosh" entries.
+    
+    Do not include markdown formatting, just raw JSON.
+    """
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        return {
+            "general_sentences": [idea, idea + " method", idea + " analysis"],
+            "review_query": idea + " review paper",
+            "thesis_query": idea + " thesis dissertation"
+        }
 
 # ==================== SIDEBAR - API KEYS ====================
 with st.sidebar:
@@ -96,6 +138,9 @@ with st.sidebar:
     if st.session_state.get("passed_idea"):
         progress_steps.append("✅ Idea Generated")
     
+    if st.session_state.get("search_payload") and st.session_state.search_payload["general"]:
+        progress_steps.append("✅ Search Strategies Created")
+
     if st.session_state.get("all_papers"):
         progress_steps.append(f"✅ {len(st.session_state.all_papers)} Papers Found")
     
@@ -129,8 +174,9 @@ if st.button("Generate & Process Ideas", type="primary"):
     if not st.session_state.deepseek_key or not st.session_state.openai_key:
         st.error("❌ Please enter both DeepSeek and OpenAI API keys in the sidebar.")
     else:
-        with st.spinner("🔄 Generating ideas..."):
+        with st.spinner("🔄 Generating ideas (DeepSeek)..."):
             try:
+                # 1. Generate Raw Ideas
                 raw_ideas = generate_ideas_deepseek(
                     st.session_state.deepseek_key, 
                     title, 
@@ -138,6 +184,7 @@ if st.button("Generate & Process Ideas", type="primary"):
                     tongue_use
                 )
                 
+                # 2. Score and Select Best Idea
                 best_idea, clout = select_and_score_openai(
                     st.session_state.openai_key, 
                     raw_ideas, 
@@ -145,15 +192,36 @@ if st.button("Generate & Process Ideas", type="primary"):
                     search_title
                 )
                 
-                # Save to session state
+                # Save Main Idea
                 st.session_state.passed_idea = best_idea
                 
+                # 3. NEW: Transform into Search Payloads
+                with st.spinner("⚙️ Optimizing search strategies..."):
+                    client = OpenAI(api_key=st.session_state.openai_key)
+                    search_strategies = transform_idea_for_search(client, best_idea)
+                    
+                    st.session_state.search_payload = {
+                        "general": search_strategies.get("general_sentences", []),
+                        "review": search_strategies.get("review_query", ""),
+                        "thesis": search_strategies.get("thesis_query", "")
+                    }
+
                 st.subheader("✨ Selected Best Idea")
                 with st.container(border=True):
-                    st.markdown(best_idea)
+                    st.markdown(f"**Core Concept:** {best_idea}")
                     st.metric(label="Clout Score", value=f"{clout}%")
+                    
+                    st.divider()
+                    st.write("**Search Engine Pre-sets Generated:**")
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.info("General Search\n(3 Sentences)")
+                    with c2:
+                        st.warning("Review Paper\n(Strategy)")
+                    with c3:
+                        st.success("KrishiKosh Thesis\n(Strategy)")
                 
-                st.success("✅ Idea generated successfully! Proceed to next step.")
+                st.success("✅ Idea generated & search strategies prepared!")
                 
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
@@ -229,15 +297,8 @@ with st.expander("ℹ️ How to Use This App"):
     st.markdown("""
     **Workflow Steps:**
     1. **Enter API Keys** in the sidebar (they will be remembered)
-    2. **Generate Idea** - Fill in project details and click "Generate & Process"
-    3. **Search Papers** - Navigate to Page 2 to search for research papers
+    2. **Generate Idea** - Creates a core concept AND 3 specific search strategies (General, Review, Thesis).
+    3. **Search Papers** - Uses the 3 strategies to find targeted papers.
     4. **Score & Select** - Go to Page 3 to filter and select relevant papers
     5. **Download PDFs** - Finally, download selected papers on Page 4
-    
-    **Required API Keys:**
-    - DeepSeek: For idea generation
-    - OpenAI: For idea scoring and paper analysis
-    - SerpAPI: For Google Scholar and KrishiKosh search
-    - Semantic Scholar (Optional): For additional papers
-    - CORE API (Optional): For better PDF download success
     """)
