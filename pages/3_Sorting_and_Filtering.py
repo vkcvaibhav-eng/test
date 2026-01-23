@@ -18,7 +18,7 @@ def llm_filter_stage_1(papers, idea, client):
     Search Idea: {idea}
     Task: Review these papers and pick the TOP 50 most likely to be relevant. 
     Return ONLY a JSON object with a key "indices" containing a list of numbers.
-    Papers: {[{'idx': i, 'title': p['title']} for i, p in enumerate(papers)]}
+    Papers: {[{'idx': i, 'title': p['title'], 'type': p.get('type', 'Unknown')} for i, p in enumerate(papers)]}
     """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -36,33 +36,53 @@ def llm_score_stage_2(papers, idea, client):
     """Stage 2: GPT-4o final relevance scoring and classification."""
     refined_papers = []
     progress_bar = st.progress(0)
+    
     for i, p in enumerate(papers):
+        # DETECT EXISTING CATEGORY FROM SEARCH ENGINE
+        existing_type = p.get('type', None) 
+        
         prompt = f"""
         Idea: {idea}
         Paper Title: {p['title']}
         Snippet: {p.get('snippet', 'N/A')}
+        Existing Category: {existing_type if existing_type else "Unknown"}
+        
         Task: 
         1. Score relevance (0-100).
-        2. Classify as 'Research Article', 'Review Paper', or 'Thesis'.
-        Return JSON: {{"score": 85, "category": "Research Article"}}
+        2. Classify ONLY as one of: 'Research', 'Review', 'Thesis'.
+        IMPORTANT: If 'Existing Category' is provided (Review or Thesis), YOU MUST KEEP IT unless it is clearly wrong.
+        
+        Return JSON: {{"score": 85, "category": "Research"}}
         """
-        res = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}
-        )
-        data = json.loads(res.choices[0].message.content)
         
-        # Create a new dict object to avoid modifying the original by reference
-        new_paper = p.copy() 
-        new_paper['relevance_score'] = data.get('score', 0)
-        new_paper['category'] = data.get('category', 'Research Article')
-        
-        # FIX 2: Use a stable MD5 hash for the ID instead of Python's hash()
-        new_paper['id'] = f"{i}_{generate_paper_id(p['title'])}"
-        
-        refined_papers.append(new_paper)
+        try:
+            res = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            data = json.loads(res.choices[0].message.content)
+            
+            # Create a new dict object
+            new_paper = p.copy() 
+            new_paper['relevance_score'] = data.get('score', 0)
+            
+            # LOGIC: If search engine explicitly said "Thesis" or "Review", prioritize that over LLM guess
+            if existing_type in ['Thesis', 'Review']:
+                new_paper['category'] = existing_type
+            else:
+                new_paper['category'] = data.get('category', 'Research')
+            
+            # FIX 2: Stable ID
+            new_paper['id'] = f"{i}_{generate_paper_id(p['title'])}"
+            
+            refined_papers.append(new_paper)
+            
+        except Exception as e:
+            pass # Skip on error
+            
         progress_bar.progress((i + 1) / len(papers))
+        
     return refined_papers
 
 # --- UI SECTION ---
@@ -100,17 +120,19 @@ else:
     if "scored_papers" in st.session_state:
         scored = st.session_state.scored_papers
         
+        # DEFINED CATEGORIES (Must match Search Engine & LLM Output)
         categories = [
-            {"key": "Research Article", "label": "Research Papers", "limit": 30},
-            {"key": "Review Paper", "label": "Review Papers", "limit": 5},
+            {"key": "Research", "label": "Research Papers", "limit": 30},
+            {"key": "Review", "label": "Review Papers", "limit": 5},
             {"key": "Thesis", "label": "Theses", "limit": 5}
         ]
 
         for cat in categories:
             st.header(f"📂 {cat['label']}")
             
+            # Filter papers by category
             cat_papers = sorted(
-                [p for p in scored if p['category'] == cat['key']], 
+                [p for p in scored if p.get('category') == cat['key']], 
                 key=lambda x: x.get('relevance_score', 0), 
                 reverse=True
             )
@@ -137,7 +159,10 @@ else:
                 display_list = remaining_in_cat[:cat['limit']]
                 
                 if not display_list:
-                    st.caption("No candidates available.")
+                    if len(cat_papers) == 0:
+                         st.warning(f"No papers found for category: {cat['key']}")
+                    else:
+                        st.caption("All candidates selected.")
                 
                 for p in display_list:
                     # FIX 3: Ensured the checkbox key is unique by including category and ID
@@ -154,12 +179,11 @@ else:
 
             st.divider()
 
-   # --- INTEGRATION: PAGE 4 NAVIGATION ---
-st.markdown("### 🏁 Final Step")
-if st.session_state.get("selected_paper_ids"):
-    st.success(f"Ready! You have selected {len(st.session_state.selected_paper_ids)} papers.")
-    if st.button("🚀 Proceed to Page 4: Deep Analysis", type="primary"):
-        # MUST match your filename exactly: 4_deep_analysis.py
-        st.switch_page("pages/4_deep_analysis.py") 
-else:
-    st.warning("Please select at least one paper to continue.")
+    # --- INTEGRATION: PAGE 4 NAVIGATION ---
+    st.markdown("### 🏁 Final Step")
+    if st.session_state.get("selected_paper_ids"):
+        st.success(f"Ready! You have selected {len(st.session_state.selected_paper_ids)} papers.")
+        if st.button("🚀 Proceed to Page 4: PDF Downloader", type="primary"):
+            st.switch_page("pages/4_PDF_Downloader.py") 
+    else:
+        st.warning("Please select at least one paper to continue.")
